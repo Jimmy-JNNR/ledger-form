@@ -1,4 +1,4 @@
-/* Local Ledger 記一筆 form (Telegram Mini App). local-ledger-form v2.5.0
+/* Local Ledger 記一筆 form (Telegram Mini App). local-ledger-form v2.11.0
  * Static page: no data, no secrets. The bot puts the choices (and the entry to edit) in ?d=, the page sends the
  * answer back with Telegram.WebApp.sendData. The bot checks everything again (ledger/form.py validate).
  * Opened from inline mode (d.x, 2.5.0, a group): sendData does not exist there, so 送出 puts "記帳|…" after
@@ -49,14 +49,20 @@
                amount: String(d.e.amount || "").replace(/\.00$/, "") };
     }
     return { kind: "expense", date: localDate(now), owner: d["do"] || d.o[0], payer: d.pa.indexOf(d.me) >= 0 ? d.me : d.pa[0],
-             fixed: 0, category: d.ce[0], note: "", amount: "", currency: "TWD" };
+             fixed: 0, category: firstCategory(d, "expense"), note: "", amount: "", currency: "TWD" };
+  }
+
+  /* 2.9.0: a new expense starts on d.dc (DEFAULT_CATEGORY, 食) when it is in the list; an older bot sends no dc */
+  function firstCategory(d, kind) {
+    var cats = kind === "income" ? d.ci : d.ce;
+    return kind === "expense" && d.dc && cats.indexOf(d.dc) >= 0 ? d.dc : cats[0];
   }
 
   /* switching 支出 <-> 收入 keeps what still makes sense */
   function switchKind(st, d, kind) {
     var s = Object.assign({}, st, { kind: kind });
     var cats = kind === "income" ? d.ci : d.ce;
-    if (cats.indexOf(s.category) < 0) s.category = cats[0];
+    if (cats.indexOf(s.category) < 0) s.category = firstCategory(d, kind);
     if (kind === "income" && s.owner === d.j && !st._ownerTouched) s.owner = d.o.indexOf(d.me) >= 0 && d.me !== d.j ? d.me : d.o[1];
     if (kind === "expense" && s.owner !== d.j && !st._ownerTouched) s.owner = d["do"] || d.j;
     return s;
@@ -79,8 +85,8 @@
   function check(st, d) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(st.date || "")) return "請選日期";
     var a = String(st.amount || "").replace(/,/g, "").trim();
-    if (!/^\d+(\.\d{1,2})?$/.test(a) || Number(a) <= 0) return "金額要是大於 0 的數字（最多兩位小數）";
-    if (Number(a) > (st.currency && st.currency !== "TWD" ? 999999999999.99 : 9999999999.99)) return "金額太大";
+    if (!/^-?\d+(\.\d{1,2})?$/.test(a) || Number(a) === 0) return "金額要是數字（不能是 0，最多兩位小數；退款按 ± 變負數）";
+    if (Math.abs(Number(a)) > (st.currency && st.currency !== "TWD" ? 999999999999.99 : 9999999999.99)) return "金額太大";
     if ((d.cu || ["TWD"]).indexOf(st.currency || "TWD") < 0) return "請選幣別";
     if ((st.kind === "income" ? d.ci : d.ce).indexOf(st.category) < 0) return "請選目錄";
     if (ownersFor(d, st.kind).indexOf(st.owner) < 0) return st.kind === "income" ? "請選是誰的收入" : "請選費用歸屬";
@@ -120,15 +126,20 @@
     return s;
   }
 
+  function flipSign(a) {
+    var t = String(a || "").trim();
+    return t.charAt(0) === "-" ? t.slice(1) : "-" + t;
+  }
+
   function money(a, cur) {
     var n = Number(String(a || "").replace(/,/g, ""));
-    if (!isFinite(n) || n <= 0) return "";
+    if (!isFinite(n) || n === 0) return "";
     return (cur && cur !== "TWD" ? cur + " " : "NT$") + n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   }
 
   var api = { readSetup: readSetup, initialState: initialState, switchKind: switchKind, ownersFor: ownersFor,
               check: check, payload: payload, money: money, HINT: HINT, localDate: localDate, VERSION: VERSION,
-              items: items, applyItem: applyItem, inlineQuery: inlineQuery, TAG: TAG };
+              items: items, applyItem: applyItem, inlineQuery: inlineQuery, TAG: TAG, flipSign: flipSign };
   if (typeof module !== "undefined" && module.exports) { module.exports = api; return; }
   root.LedgerForm = api;
 
@@ -243,8 +254,15 @@
       var amt = el("input"); amt.type = "text"; amt.inputMode = "decimal"; amt.value = st.amount; amt.placeholder = "0";
       amt.className = "amount " + st.kind;
       amt.addEventListener("input", function () { st.amount = amt.value; update(); });
-      row.appendChild(cur); row.appendChild(amt);
+      /* 2.11.0: a refund is a negative amount; the iPhone number pad has no minus key, so ± flips the sign */
+      var flip = el("button", "sign", "±"); flip.type = "button";
+      flip.addEventListener("click", function () {
+        st.amount = flipSign(st.amount); render();
+      });
+      row.appendChild(cur); row.appendChild(amt); row.appendChild(flip);
       app.appendChild(field(st.kind === "income" ? "Amount" : "Price", row));
+      if (String(st.amount || "").trim().charAt(0) === "-")
+        app.appendChild(el("p", "foot", st.kind === "income" ? "負數＝收入扣回" : "負數＝退款／折抵：從這個目錄的支出扣掉"));
       if (d.x) app.appendChild(el("p", "foot", "按下方按鈕後回到聊天：點輸入框上方跳出的預覽卡片，才會記到這個聊天裡"));
       if (st.currency && st.currency !== "TWD") app.appendChild(el("p", "foot", "外幣：bot 用臺灣銀行當天的即期賣出匯率換成台幣；刷卡的話，匯入信用卡帳單後會改成實際刷卡金額"));
 
