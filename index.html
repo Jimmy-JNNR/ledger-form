@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- local-ledger-form v2.13.0: the 記一筆 form of Local Ledger (a Telegram Mini App). Static: no data, no secrets. -->
+<!-- local-ledger-form v2.18.0: the 記一筆 form of Local Ledger (a Telegram Mini App). Static: no data, no secrets. -->
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
@@ -10,8 +10,14 @@
 <title>記一筆</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-:root{--bg:var(--tg-theme-secondary-bg-color,#f2f2f7);--card:var(--tg-theme-bg-color,#fff);--ink:var(--tg-theme-text-color,#141416);
---hint:var(--tg-theme-hint-color,#8e8e93);--acc:var(--tg-theme-button-color,#2481cc);--acc-ink:var(--tg-theme-button-text-color,#fff);--line:#d2d2d8}
+/* 2.16.0: light / dark. form.js sets .dark or .light from Telegram's theme (and Telegram's colours on these
+   variables); outside Telegram the phone's setting decides (prefers-color-scheme). */
+:root{color-scheme:light;--bg:#f2f2f7;--card:#fff;--ink:#141416;--hint:#8e8e93;--acc:#2481cc;--acc-ink:#fff;--line:#d2d2d8;
+--seg:#e3e3e8;--seg-on:#fff;--red:#e13c34;--green:#34a853;--orange:#e8890c;--warn-bg:#fdecea;--warn-ink:#b3261e}
+:root.dark{color-scheme:dark;--bg:#000;--card:#1c1c1e;--ink:#fff;--hint:#8e8e93;--acc:#3496eb;--acc-ink:#fff;--line:#3a3a3c;
+--seg:#2c2c2e;--seg-on:#636366;--red:#ff453a;--green:#30d158;--orange:#ff9f0a;--warn-bg:#3a1d1b;--warn-ink:#ff8a80}
+@media (prefers-color-scheme:dark){:root:not(.light){color-scheme:dark;--bg:#000;--card:#1c1c1e;--ink:#fff;--hint:#8e8e93;--acc:#3496eb;
+--acc-ink:#fff;--line:#3a3a3c;--seg:#2c2c2e;--seg-on:#636366;--red:#ff453a;--green:#30d158;--orange:#ff9f0a;--warn-bg:#3a1d1b;--warn-ink:#ff8a80}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
 #app{max-width:520px;margin:0 auto;padding:14px 18px 90px}
@@ -21,23 +27,26 @@ h1{font-size:24px;margin:0}.sub{color:var(--hint);font-size:13px}
 .chips{display:flex;gap:6px}.chip{flex:1;min-width:0;border:1px solid var(--line);background:var(--card);color:var(--ink);
 border-radius:9px;padding:8px 4px;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chip.on{background:var(--acc);border-color:var(--acc);color:var(--acc-ink);font-weight:600}
-.seg{background:#e3e3e8;border-radius:10px;padding:2px;gap:0;margin:0 0 14px}.seg .chip{border:0;background:transparent;color:var(--hint);font-size:15px}
-.seg .chip.on{background:var(--card);color:#e13c34}.seg .chip.on:last-child{color:#34a853}.seg.three .chip.on:nth-child(2){color:#e8890c}
+.seg{background:var(--seg);border-radius:10px;padding:2px;gap:0;margin:0 0 14px}.seg .chip{border:0;background:transparent;color:var(--hint);font-size:15px}
+.seg .chip.on{background:var(--seg-on);color:var(--red)}.seg .chip.on:last-child{color:var(--green)}.seg.three .chip.on:nth-child(2){color:var(--orange)}
 input,select{width:100%;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:10px 12px;font-size:16px;-webkit-appearance:none;appearance:none}
 select{background-image:linear-gradient(45deg,transparent 50%,var(--hint) 50%),linear-gradient(135deg,var(--hint) 50%,transparent 50%);
 background-position:calc(100% - 18px) 50%,calc(100% - 12px) 50%;background-size:6px 6px;background-repeat:no-repeat}
 input:focus,select:focus{outline:2px solid var(--acc);border-color:var(--acc)}
+input:disabled{opacity:.5}
 .money{display:flex;gap:8px}.money .cur{width:96px;flex:none}.money .sign{width:48px;flex:none;border:1px solid var(--line);
-background:var(--card);color:var(--ink);border-radius:10px;font-size:18px}.amount{font-weight:700;font-size:18px}.amount.income{color:#34a853}
-.err{color:#e13c34;min-height:1em;margin:4px 0}.foot,.msg{color:var(--hint);font-size:12.5px}
-.del{display:block;margin:6px auto;border:0;background:none;color:#e13c34;font-weight:600;font-size:15px}
+background:var(--card);color:var(--ink);border-radius:10px;font-size:18px}.amount{font-weight:700;font-size:18px}.amount.income{color:var(--green)}
+.money .ntd{flex:none;align-self:center;color:var(--hint);font-weight:600;font-size:16px;min-width:34px}
+.err{color:var(--red);min-height:1em;margin:4px 0}.foot,.msg{color:var(--hint);font-size:12.5px}
+.del{display:block;margin:6px auto;border:0;background:none;color:var(--red);font-weight:600;font-size:15px}
 .pick{font-weight:600}
-.warn{background:#fdecea;color:#b3261e;border-radius:10px;padding:8px 10px;font-size:13px;margin:0 0 12px}
+.warn{background:var(--warn-bg);color:var(--warn-ink);border-radius:10px;padding:8px 10px;font-size:13px;margin:0 0 12px}
 .ver{color:var(--hint);font-size:12px;text-align:center;margin:14px 0 0}
 </style>
 </head>
 <body>
 <div id="app"></div>
-<script src="form.js"></script>
+<!-- 2.18.0: the version in the name, so a phone never runs an old cached form.js with a new page -->
+<script src="form.js?v=2.18.0"></script>
 </body>
 </html>
