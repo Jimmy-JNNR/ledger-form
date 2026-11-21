@@ -1,4 +1,4 @@
-/* Local Ledger 記一筆 form (Telegram Mini App). local-ledger-form v2.18.0
+/* Local Ledger 記一筆 form (Telegram Mini App). local-ledger-form v2.19.0
  * Static page: no data, no secrets. The bot puts the choices (and the entry to edit) in ?d=, the page sends the
  * answer back with Telegram.WebApp.sendData. The bot checks everything again (ledger/form.py validate).
  * Opened from inline mode (d.x, 2.5.0, a group): sendData does not exist there, so 送出 puts "記帳|…" after
@@ -11,7 +11,7 @@
   var VERSION = 1;                     /* the data sent (v); the page's own version is FORM_VERSION */
   /* 2.13.0: this page's version (ledger/form.py FORM_VERSION; also the first line here and in index.html). Shown at
    * the bottom of the form, sent back as fv; the bot puts the version it expects in d.fv. */
-  var FORM_VERSION = "2.18.0";
+  var FORM_VERSION = "2.19.0";
   var HINT = {
     "食": "食品＆日用品", "衣": "服飾／美容／美髮", "住": "設備／修繕／水電瓦斯網路／貸款", "行": "加油／保養／交通費／停車",
     "育": "學費／育兒／教育", "樂": "旅遊／門票／遊戲", "醫藥保健": "醫療／個人保險", "其他": "禮金／禮物／稅",
@@ -172,37 +172,61 @@
     return d.o.slice();     /* 收入 can be Joint too (half each); a kid's income is the kid's */
   }
 
-  var TAG = "記帳|", MAX_QUERY = 256;
+  var TAG = "記帳|", TAG2 = "記帳2|", MAX_QUERY = 256;
 
-  /* inline mode: the answer as the inline query ledger/inline.py form_json reads. 2.16.0: the query has one amount
-   * in one currency (the meaning before 2.16.0): 金額 in TWD; only when 金額 is empty, the 外幣 (the bot converts) */
+  /* is the bot (d.fv, the form version it expects) at least v (e.g. [2, 19, 0])? none sent = older than 2.13.0 */
+  function botAtLeast(d, v) {
+    var have = vt(d && d.fv);
+    if (!have) return false;
+    for (var i = 0; i < 3; i++) if (have[i] !== v[i]) return have[i] > v[i];
+    return true;
+  }
+
+  /* inline mode: the answer as the inline query ledger/inline.py form_json reads.
+   * 2.19.0 (Jimmy: the group form lost the 外幣 when 金額 was filled): to a bot of 2.19.0 or later "記帳2|", which
+   * carries 金額 (TWD, may be empty) and the 外幣 apart, like the private form. To an older bot the old query: one
+   * amount in one currency, 金額 in TWD, only when 金額 is empty the 外幣 (the bot converts) */
   function inlineQuery(st, d) {
     var p = payload(st, Object.assign({}, d, { e: null }));
-    var cur = "TWD", amount = clean(st.amount);
-    if (foreign(st) && (amount === "" || oldBot(d))) { cur = st.currency; amount = clean(st.orig); }
-    /* 2.15.0: the 備註 is a tenth field, only when there is one (ledger/inline.py form_json) */
     /* 2.18.0 (review): no field may hold a "|" or a line break, not only 項目 and 備註 (a hand-made ?d= could put
      * one in a name); the bot also rejects a query with the wrong number of fields */
     var safe = function (v) { return String(v === undefined || v === null ? "" : v).replace(/\|/g, "／").replace(/[\r\n]+/g, " "); };
-    return TAG + [p.kind === "income" ? "i" : "e", p.date, p.owner, p.payer || "", p.fixed ? 1 : 0, p.category,
-                  cur, amount, p.note || ""].map(safe)
-      .concat(p.remark ? [safe(p.remark)] : []).join("|");
+    var head = [p.kind === "income" ? "i" : "e", p.date, p.owner, p.payer || "", p.fixed ? 1 : 0, p.category];
+    var tail = p.remark ? [safe(p.remark)] : [];       /* 2.15.0: the 備註 is the last field, only when there is one */
+    if (botAtLeast(d, [2, 19, 0])) {
+      var f = foreign(st);
+      return TAG2 + head.concat([clean(st.amount), f ? st.currency : "TWD", f ? clean(st.orig) : "", p.note || ""])
+        .map(safe).concat(tail).join("|");
+    }
+    var cur = "TWD", amount = clean(st.amount);
+    if (foreign(st) && (amount === "" || oldBot(d))) { cur = st.currency; amount = clean(st.orig); }
+    return TAG + head.concat([cur, amount, p.note || ""]).map(safe).concat(tail).join("|");
   }
 
   var FUTURE_DAYS = 366;               /* ledger/parse.py FUTURE_DAYS */
-  /* days from today (d.t, the bot's day) to date; 0 when the bot did not say what today is */
+  /* days from today to date; 0 when the bot did not say what today is */
   function daysAhead(today, date) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(today || "")) return 0;
     return Math.round((Date.parse(date) - Date.parse(today)) / 86400000);
   }
 
-  /* the same rules as the bot; returns an error text or "" */
-  function check(st, d) {
+  /* 2.19.0: today is the later of the bot's day in the link (d.t) and the phone's. The 🧾 表單 key in the private chat
+   * keeps the link of the day it was sent: two days later d.t alone made today look like "the future" and every
+   * entry was refused (只有固定支出可以記未來的日期). The bot checks the date again with its own today.
+   * "" when the bot did not say what today is (older than 2.14.0): no date check here, as before */
+  function today(d, now) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test((d && d.t) || "")) return "";
+    var mine = localDate(now);
+    return d.t > mine ? d.t : mine;
+  }
+
+  /* the same rules as the bot; returns an error text or "" (now: for the tests) */
+  function check(st, d, now) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(st.date || "")) return "請選日期";
     /* 2.14.0: only a 固定支出 (房貸、分期) may be dated after tomorrow; an edit may keep the date of a non-固定 entry
      * (one imported with its future date), like ledger/form.py validate (db.entry_date) */
     var kept = d.e && st.date === d.e.date && !(d.e.kind === "expense" && d.e.fixed);
-    var ahead = kept ? 0 : daysAhead(d.t, st.date);
+    var ahead = kept ? 0 : daysAhead(today(d, now), st.date);
     if (ahead > 1 && !(st.kind === "expense" && st.fixed)) return "只有固定支出可以記未來的日期";
     if (ahead > FUTURE_DAYS) return "固定支出最多記到一年後";
     /* 2.16.0: 金額 (TWD) is needed unless a 外幣 is given (the bot converts it); a 外幣 needs its amount */
@@ -361,7 +385,7 @@
               items: items, applyItem: applyItem, inlineQuery: inlineQuery, TAG: TAG, flipSign: flipSign, wellFormed: wellFormed,
               FORM_VERSION: FORM_VERSION, MAX_SETUP: MAX_SETUP, MAX_LIST: MAX_LIST, versionNote: versionNote, flipMoney: flipMoney, shownMoney: shownMoney,
               editTitle: editTitle, themeVars: themeVars, inTelegram: inTelegram, foreignCurrencies: foreignCurrencies,
-              oldBot: oldBot };
+              oldBot: oldBot, botAtLeast: botAtLeast, today: today, TAG2: TAG2 };
   if (typeof module !== "undefined" && module.exports) { module.exports = api; return; }
   root.LedgerForm = api;
 
@@ -455,8 +479,11 @@
 
       app.appendChild(field(st.kind === "income" ? "誰的收入" : "費用歸屬",
         chips(ownersFor(d, st.kind), st.owner, function (o) { st.owner = o; st._ownerTouched = true; render(); })));
+      /* 2.19.0: what 📝 記一筆 says too: a Joint income counts half for each adult (d.pa = Joint + the adults) */
+      if (st.kind === "income" && st.owner === d.j && d.pa[0] === d.j && d.pa.length > 2)
+        app.appendChild(el("p", "foot", d.j + " 的收入：" + d.pa.slice(1).join("、") + " 各算一半"));
       if (st.kind === "expense") {
-        app.appendChild(field("消費方式（誰付的）", chips(d.pa, st.payer, function (p) { st.payer = p; render(); })));
+        app.appendChild(field("消費方式", chips(d.pa, st.payer, function (p) { st.payer = p; render(); })));
       }
       var catSel = el("select");
       (st.kind === "income" ? d.ci : d.ce).forEach(function (c) {
@@ -520,7 +547,7 @@
       if (foreign(st) && oldBot(d)) {
         app.appendChild(el("p", "foot", "記帳 bot 是 2.16.0 以前的版本：有外幣時只送外幣，bot 用臺灣銀行匯率換成台幣（金額不能自己填）"));
       } else if (foreign(st)) {
-        app.appendChild(el("p", "foot", d.x
+        app.appendChild(el("p", "foot", d.x && !botAtLeast(d, [2, 19, 0])
           ? "群組裡（inline）只送一個金額：金額空白就送外幣，bot 用臺灣銀行當天的即期賣出匯率換成台幣；金額有填就只記台幣"
           : "金額空白：bot 用臺灣銀行當天的即期賣出匯率把外幣換成台幣；有填就照你填的台幣記。刷卡的話，匯入信用卡帳單後會改成實際刷卡金額"));
       }
